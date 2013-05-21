@@ -7,8 +7,9 @@
 #include <linux/fcntl.h>
 #include <asm/uaccess.h>
 
-static int fd;
-static mm_segment_t* old;
+//http://stackoverflow.com/questions/1184274/how-to-read-write-files-within-a-linux-kernel-module
+
+struct file* filp;
 
 struct coords{
 	int x;
@@ -29,21 +30,22 @@ static void joystick_interrupt(void)
 	return;
 }
 
-/*static int open_file(char *filename, mm_segment_t* old)
+static struct file* open_file(char *filename)
 {
-  int fd;
+	struct file* filp = NULL;
+	mm_segment_t old;
+  old = get_fs();
+  set_fs(get_ds());
 
-  old = &get_fs();
-  set_fs(KERNEL_DS);
+  filp = filp_open(filename, O_RDWR, 0);
 
-  fd = sys_open(filename, O_RDONLY, 0);
-	return fd;
+	set_fs(old);
+	return filp;
 }
 
-static void close_file(int fd, mm_segment_t* old)
+static void close_file(struct file* filp)
 {
-	sys_close(fd);
-	set_fs(*old);
+	filp_close(filp, NULL);
 }
 
 static COORDS read_file(int fd)
@@ -53,21 +55,21 @@ static COORDS read_file(int fd)
 	//tutaj kod pobierania wartosci...
 	//=========
 	return crd;
-}*/
+}
 
 static void execute(void)
 {
-	while(1)
-	{
+	//while(1)
+	//{
 		//read_file(fd);
 		//joystick_interrupt();
-		printk(KERN_INFO, "Petla!\n");
-	}
+		printk(KERN_INFO "Petla!\n");
+	//}
 }
 
 static int __init init(void)
 {
-  	//fd = open_file("/dev/ttyACM0", old);
+  //	filp = open_file("/dev/ttyACM0");
 	joystick_dev = input_allocate_device();
 	joystick_dev->evbit[0] = BIT_MASK(EV_ABS);
 	joystick_dev->absbit[BIT_WORD(ABS_X)] = BIT_MASK(ABS_X);
@@ -86,7 +88,7 @@ static int __init init(void)
 static void __exit exit(void)
 {
 	input_unregister_device(joystick_dev);
-	//close_file(fd, old);
+	//close_file(filp);
 }
 
 module_init(init);
