@@ -9,6 +9,7 @@
 #include <linux/fs.h>
 #include <linux/fcntl.h>
 #include <linux/termios.h>
+#include <linux/delay.h>
 #include <asm/uaccess.h>
 
 // Serial port device
@@ -28,7 +29,101 @@ static struct file* ez430_fd = 0;
 
 static mm_segment_t old_fs;
 
+static void chronos_ez430_send(const unsigned char *command, size_t size) {
+	int i = 0;
+
+	if(!ez430_fd) {
+		printk(KERN_CRIT "CHRONOS EZ430 IS NOT OPEN!");
+		return ;
+	}
+
+	// Logujemy wysyłaną komendę
+	printk(KERN_INFO "CHRONOS EZ430 COMMAND: ");
+	for(i = 0; i < size; i++) {
+		printk(KERN_CONT "0x%x ", (int) command[i]);
+	}
+	printk(KERN_CONT "\n");
+
+	ez430_fd->f_op->write(ez430_fd, command, size, NULL);
+}
+
+static void chronos_ez430_reply(char *buffor, size_t size) {
+	int i = 0;
+
+	if(!ez430_fd) {
+		printk(KERN_CRIT "CHRONOS EZ430 IS NOT OPEN!");
+		return ;
+	}
+
+	if(size == 0) {
+		// Odczytujmey ilość dostępych bajtów
+	}
+
+	// Odczytujemy odpowiedź
+	ez430_fd->f_op->read(ez430_fd, buffor, size, NULL);
+
+	// Logujemy odpowiedź
+	printk(KERN_INFO "CHRONOS EZ430 ANSWER: ");
+	for(i = 0; i < size; i++) {
+		printk(KERN_CONT "0x%x ", (unsigned char) buffor[i]);
+	}
+	printk(KERN_CONT "\n");
+}
+
+static void chronos_ez430_reset() {
+	// RESET command
+	chronos_ez430_send("\xFF\x01\x03", 3);
+	//
+	msleep(15);
+}
+
+static void chronos_ez430_status() {
+	char status[4] = { 0 };
+
+	// STATUS command
+	chronos_ez430_send("\xFF\x00\x04\x00", 4);
+	//
+	msleep(15);
+
+	chronos_ez430_reply(status, 4);
+}
+
+static void chronos_ez430_spl_start() {
+	printk(KERN_INFO "CHRONOS EZ430 ACCESS POINT START\n");
+
+	// ACCESS POINT START
+	chronos_ez430_send("\xFF\x07\x03", 3);
+	msleep(500);
+}
+
+static void chronos_ez430_spl_stop() {
+	printk(KERN_INFO "CHRONOS EZ430 ACCESS POINT STOP\n");
+
+	chronos_ez430_send("\xFF\x31\x16\x07\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", 22);
+	msleep(15);
+
+	// Wczytujemy odpowiedź
+	msleep(750);
+
+	chronos_ez430_reply("\xFF\x09\x03", 4);
+	msleep(15);
+}
+
+static void chronos_ez430_get_pos() {
+	char data[4] = { 0 };
+
+	printk(KERN_INFO "CHRONOS EZ430 GET POS\n");
+
+	chronos_ez430_send("\xFF\x08\x07\x00\x00\x00\x00", 7);
+	msleep(150);
+	return ;
+
+	// Odczytujemy zmianę pozycji
+	chronos_ez430_reply(data, 4);
+}
+
 static void chronos_ez430_open(const char *device) {
+	int i = 0;
 	struct termios settings;
 
 	printk(KERN_INFO "CHRONOS EZ430 OPEN\n");
@@ -58,13 +153,26 @@ static void chronos_ez430_open(const char *device) {
 
 	printk(KERN_INFO "CHRONOS EZ430 Hardware reset\n");
 
+	chronos_ez430_reset();
+	msleep(20);
+
+	for(i = 0; i < 10; i++) {
+		chronos_ez430_status();
+		msleep(10);
+	}
+
+	chronos_ez430_spl_start();
+
 	printk(KERN_INFO "CHRONOS EZ430 OPEN SUCCESS\n");
+
 }
 
 static void chronos_ez430_close() {
 	printk(KERN_INFO "CHRONOS EZ430 CLOSE\n");
 
 	if(!IS_ERR(ez430_fd)) {
+		chronos_ez430_spl_stop();
+
 		// Zamykamy plik urządzenia (jeśli został otwarty)
 		filp_close(ez430_fd, NULL);
 
@@ -103,7 +211,7 @@ static int chronos_joystick_open(char *filename) {
 	setup_timer(&timer, timer_callback, 0);
 
 	// Ustawiamy timer
-	if(mod_timer(&timer,  jiffies + msecs_to_jiffies(2))) {
+	if(mod_timer(&timer, jiffies + msecs_to_jiffies(150))) {
 		printk(KERN_INFO "Error in mod_timer\n");
 	}
 
@@ -121,10 +229,12 @@ static void chronos_joystick_close(struct file* filp) {
 }
 
 static void timer_callback(unsigned long data) {
+	chronos_ez430_get_pos();
+
 	// Generujemy syganł
 	chronos_joystick_interrupt();
 
-	if(mod_timer(&timer,  jiffies + msecs_to_jiffies(2))) {
+	if(mod_timer(&timer,  jiffies + msecs_to_jiffies(150))) {
 		printk(KERN_INFO "Error in mod_timer\n");
 	}
 }
