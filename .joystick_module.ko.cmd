@@ -1,0 +1,1 @@
+cmd_/home/awojs/Projekty/ChronosJoystick/src/joystick_module.ko := ld -r -m elf_i386 -T /usr/src/linux-headers-3.8.0-22-generic/scripts/module-common.lds --build-id  -o /home/awojs/Projekty/ChronosJoystick/src/joystick_module.ko /home/awojs/Projekty/ChronosJoystick/src/joystick_module.o /home/awojs/Projekty/ChronosJoystick/src/joystick_module.mod.o

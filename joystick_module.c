@@ -14,6 +14,8 @@
 
 // Serial port device
 #define CHRONOS_EZ430_DEV "/dev/ttyACM0"
+// Timer interval
+#define TIMER_INTERVAL 180
 
 /**
  * CHRONOS EZ430 API:
@@ -28,6 +30,21 @@ struct coords {
 static struct file* ez430_fd = 0;
 
 static mm_segment_t old_fs;
+
+static void printf_termios(struct termios tio) {
+	int i = 0;
+
+    printk(KERN_DEBUG "c_iflag: %x\n", tio.c_iflag);
+    printk(KERN_DEBUG "c_oflag: %x\n", tio.c_oflag);
+    printk(KERN_DEBUG "c_cflag: %x\n", tio.c_cflag);
+    printk(KERN_DEBUG "c_lflag: %x\n", tio.c_lflag);
+    printk(KERN_DEBUG "c_cc: ");
+    for(; i < NCCS; i++)
+        printk(KERN_CONT "%x ", tio.c_cc[i]);
+    printk(KERN_DEBUG "\n");
+    //printk(KERN_DEBUG "c_ispeed: %x\n", tio.c_iflag);
+    //printk(KERN_DEBUG "c_ospeed: %x\n", tio.c_ospeed);
+}
 
 static void chronos_ez430_send(const unsigned char *command, size_t size) {
 	int i = 0;
@@ -44,11 +61,18 @@ static void chronos_ez430_send(const unsigned char *command, size_t size) {
 	}
 	printk(KERN_CONT "\n");
 
+	old_fs = get_fs();
+	set_fs(get_ds());
+
 	ez430_fd->f_op->write(ez430_fd, command, size, NULL);
+
+	set_fs(old_fs);
 }
 
 static void chronos_ez430_reply(char *buffor, size_t size) {
 	int i = 0;
+	int ret = 0;
+	unsigned long long offset = 0;
 
 	if(!ez430_fd) {
 		printk(KERN_CRIT "CHRONOS EZ430 IS NOT OPEN!");
@@ -57,10 +81,19 @@ static void chronos_ez430_reply(char *buffor, size_t size) {
 
 	if(size == 0) {
 		// Odczytujmey ilość dostępych bajtów
+		printk(KERN_CRIT "CHRONOS EZ430: Size == 0");
+		return ;
 	}
 
+	old_fs = get_fs();
+	set_fs(get_ds());
+
 	// Odczytujemy odpowiedź
-	ez430_fd->f_op->read(ez430_fd, buffor, size, NULL);
+	//ez430_fd->f_op->read(ez430_fd, buffor, size, NULL);
+	ret = vfs_read(ez430_fd, buffor, size, &offset);
+	printk(KERN_DEBUG "CHRONOS EZ430: vsf_read = %d", ret);
+
+	set_fs(old_fs);
 
 	// Logujemy odpowiedź
 	printk(KERN_INFO "CHRONOS EZ430 ANSWER: ");
@@ -105,7 +138,7 @@ static void chronos_ez430_spl_stop() {
 	// Wczytujemy odpowiedź
 	msleep(750);
 
-	chronos_ez430_reply("\xFF\x09\x03", 4);
+	chronos_ez430_send("\xFF\x09\x03", 4);
 	msleep(15);
 }
 
@@ -116,7 +149,6 @@ static void chronos_ez430_get_pos() {
 
 	chronos_ez430_send("\xFF\x08\x07\x00\x00\x00\x00", 7);
 	msleep(150);
-	return ;
 
 	// Odczytujemy zmianę pozycji
 	chronos_ez430_reply(data, 4);
@@ -129,7 +161,7 @@ static void chronos_ez430_open(const char *device) {
 	printk(KERN_INFO "CHRONOS EZ430 OPEN\n");
 
 	old_fs = get_fs();
-	set_fs(KERNEL_DS);
+	set_fs(get_ds());
 
 	// Otwieramy plik urządzenia
 	ez430_fd = filp_open(device, O_RDWR | O_NOCTTY, S_IRWXU|S_IRWXG|S_IRWXO);
@@ -143,13 +175,26 @@ static void chronos_ez430_open(const char *device) {
 	ez430_fd->f_op->unlocked_ioctl(ez430_fd, TCGETS,  (unsigned long) &settings);
 
 	// Konfiguracja portu szeregowego
-    settings.c_iflag = IGNBRK | B115200;
-    settings.c_oflag = B115200;
-    settings.c_cflag = CS8 | CREAD | CLOCAL;
+//    settings.c_iflag = IGNBRK | B115200;
+//    settings.c_oflag = B115200;
+//    settings.c_cflag = CS8 | CREAD | CLOCAL;
+//    settings.c_lflag = 0;
+//    settings.c_cc[VMIN] = 1;
+
+    settings.c_iflag = 1;
+    settings.c_oflag = 0;
+    settings.c_cflag = 0x18B2 | B115200;
     settings.c_lflag = 0;
+
+    for(i = 0; i < NCCS; i++)
+    	settings.c_cc[i] = 0;
     settings.c_cc[VMIN] = 1;
 
+    printf_termios(settings);
+
 	ez430_fd->f_op->unlocked_ioctl(ez430_fd, TCSETS, (unsigned long) &settings);
+
+	set_fs(old_fs);
 
 	printk(KERN_INFO "CHRONOS EZ430 Hardware reset\n");
 
@@ -164,7 +209,6 @@ static void chronos_ez430_open(const char *device) {
 	chronos_ez430_spl_start();
 
 	printk(KERN_INFO "CHRONOS EZ430 OPEN SUCCESS\n");
-
 }
 
 static void chronos_ez430_close() {
@@ -211,7 +255,7 @@ static int chronos_joystick_open(char *filename) {
 	setup_timer(&timer, timer_callback, 0);
 
 	// Ustawiamy timer
-	if(mod_timer(&timer, jiffies + msecs_to_jiffies(150))) {
+	if(mod_timer(&timer, jiffies + msecs_to_jiffies(TIMER_INTERVAL))) {
 		printk(KERN_INFO "Error in mod_timer\n");
 	}
 
@@ -234,7 +278,7 @@ static void timer_callback(unsigned long data) {
 	// Generujemy syganł
 	chronos_joystick_interrupt();
 
-	if(mod_timer(&timer,  jiffies + msecs_to_jiffies(150))) {
+	if(mod_timer(&timer,  jiffies + msecs_to_jiffies(TIMER_INTERVAL))) {
 		printk(KERN_INFO "Error in mod_timer\n");
 	}
 }
@@ -262,8 +306,7 @@ static int __init init(void) {
 	return 0;
 }
 
-static void __exit exit(void)
-{
+static void __exit exit(void) {
 	input_unregister_device(joystick_dev);
 
 	printk(KERN_INFO "Chronos Joystick Exit\n");
